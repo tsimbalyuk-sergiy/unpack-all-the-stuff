@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/mholt/archiver/v3"
 	"go/types"
@@ -13,10 +14,12 @@ import (
 	"time"
 )
 
-const RarPattern = "*.r*"
-const IsoPattern = "*.iso"
-const Mp4Pattern = "*.mp4"
-const SfvPattern = "*.sfv"
+const (
+	RarPattern = "*.r*"
+	IsoPattern = "*.iso"
+	Mp4Pattern = "*.mp4"
+	SfvPattern = "*.sfv"
+)
 
 var list = []string{RarPattern, SfvPattern}
 
@@ -24,15 +27,16 @@ func main() {
 	var errorsWalking = 0
 	var errorsUnpacking = 0
 
-	var directoryToScan string = "I:\\tutorials-unpack"
 	//var unpack string
-	//flag.StringVar(&directoryToScan, "dir", "", "Target directory. (Required)")
+	var directoryToScan string
+	flag.StringVar(&directoryToScan, "dir", "", "Target directory. (Required)")
+	//var unpack string
 	//flag.StringVar(&unpack, "unpack", "", "Unpack action. (Required)")
-	//flag.Parse()
+	flag.Parse()
 
-	//if directoryToScan == "" || unpack == "" {
-	//	log.Fatal("Please specify target directory")
-	//}
+	if directoryToScan == "" {
+		log.Fatal("Please specify target directory")
+	}
 
 	start := time.Now()
 
