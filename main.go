@@ -29,7 +29,7 @@ func main() {
 
 	//var unpack string
 	var directoryToScan string
-	flag.StringVar(&directoryToScan, "dir", "", "Target directory. (Required)")
+	flag.StringVar(&directoryToScan, "dir", "", "Directory to scan. (Required)")
 	//var unpack string
 	//flag.StringVar(&unpack, "unpack", "", "Unpack action. (Required)")
 	flag.Parse()
