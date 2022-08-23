@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/mholt/archiver/v3"
-	"go/types"
 	"io/ioutil"
 	"log"
 	"os"
@@ -308,7 +307,7 @@ func WalkDirectories(root string, extensions []string, errorsWalking *int) []str
 	return unique(directories)
 }
 
-func mapToSet(map[string]types.Tuple) map[string]bool {
+func mapToSet() map[string]bool {
 	var set = make(map[string]bool) // New empty set
 	set["Foo"] = true               // Add
 	for k := range set {            // Loop
