@@ -2,11 +2,12 @@ package main
 
 import (
 	"archive/zip"
+	"compress/flate"
 	"flag"
 	"fmt"
 	"github.com/mholt/archiver/v3"
 	"go/types"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,28 +15,34 @@ import (
 	"time"
 )
 
+//goland:noinspection ALL
 const (
-	RarPattern         = "*.r*"
+	RarArchiveExt      = ".rar"
+	ZipArchiveExt      = ".zip"
+	RarPattern         = "*.r??"
+	ZipPattern         = "*.zip"
 	RarPatternExtraOne = "*.s*"
-	IsoPattern         = "*.iso"
-	EpubPattern        = "*.epub"
-	PdfPattern         = "*.pdf"
-	MobiPattern        = "*.mobi"
-	Mp4Pattern         = "*.mp4"
+	NfoPattern         = ".nfo"
+	IsoPattern         = ".iso"
+	EpubPattern        = ".epub"
+	PdfPattern         = ".pdf"
+	MobiPattern        = ".mobi"
+	DizPattern         = ".diz"
+	Mp4Pattern         = ".mp4"
 	SfvPattern         = "*.sfv"
 )
-
-var list = []string{RarPattern, SfvPattern}
 
 func main() {
 	var (
 		directoryToScan string
 		outputDirectory string
 		archiveType     string
+		initialArch     string
 	)
 	flag.StringVar(&directoryToScan, "dir", "", "Directory with archives. (Required)")
 	flag.StringVar(&outputDirectory, "out", "", "Output directory. Optional")
 	flag.StringVar(&archiveType, "arch", "", "Archive formats to take care of, e.g.: 'rar,zip'. If none provided zip and rar will be searched for.")
+	flag.StringVar(&initialArch, "initial_archive_type", "", "[To be considered / TBD] Defines if files are archived initially in some format and need to take special care (if you need to extract them in folders that are named after archives)")
 	flag.Parse()
 
 	if directoryToScan == "" {
@@ -65,28 +72,221 @@ func main() {
 		errorsWalking   = 0
 		errorsUnpacking = 0
 	)
-	//var files = WalkFiles(directoryToScan /*[]string{".rar"}*/, archTypes, &errorsWalking)
 	walkFilesX := WalkDirectories(directoryToScan, archTypes, &errorsWalking)
-	//sort.Slice(files, func(i, j int) bool { return strings.ToLower(files[i]) < strings.ToLower(files[j]) })
-	for i := range walkFilesX {
-		archiver.Walk(walkFilesX[i], func(f archiver.File) error {
-			zfh, ok := f.Header.(zip.FileHeader)
-			if ok {
-				fmt.Println("Filename:", zfh.Name)
-			}
-			return nil
-		})
-	}
-	//for i := range files {
-	//for ok := true; ok; ok = len(files) > 0 {
-	//
-	//}
 
+	for len(walkFilesX) != 0 {
+		handleArchives(walkFilesX, outputDirectory)
+		walkFilesX = WalkDirectories(directoryToScan, archTypes, &errorsWalking)
+	}
+	log.Println("done extracting")
+
+	log.Printf("cleaning up")
+
+	nfo := WalkDirectories(directoryToScan, []string{NfoPattern}, &errorsWalking)
+	nfos := nfo[NfoPattern]
+	if len(nfos) > 0 {
+		for i := range nfos {
+			renameInRelease(nfos[i], directoryToScan, NfoPattern)
+		}
+	}
+
+	iso := WalkDirectories(directoryToScan, []string{IsoPattern}, &errorsWalking)
+	isos := iso[IsoPattern]
+	if len(isos) > 0 {
+		for i := range isos {
+			renameInRelease(isos[i], directoryToScan, IsoPattern)
+		}
+	}
+	epub := WalkDirectories(directoryToScan, []string{EpubPattern}, &errorsWalking)
+	epubs := epub[EpubPattern]
+	if len(epubs) > 0 {
+		for i := range epubs {
+			renameInRelease(epubs[i], directoryToScan, EpubPattern)
+		}
+	}
+	pdf := WalkDirectories(directoryToScan, []string{PdfPattern}, &errorsWalking)
+	pdfs := pdf[PdfPattern]
+	if len(pdfs) > 0 {
+		for i := range pdfs {
+			renameInRelease(pdfs[i], directoryToScan, PdfPattern)
+		}
+	}
+	mobi := WalkDirectories(directoryToScan, []string{MobiPattern}, &errorsWalking)
+	mobis := mobi[MobiPattern]
+	if len(mobis) > 0 {
+		for i := range mobis {
+			renameInRelease(mobis[i], directoryToScan, MobiPattern)
+		}
+	}
+	diz := WalkDirectories(directoryToScan, []string{DizPattern}, &errorsWalking)
+	dizes := diz[DizPattern]
+	if len(dizes) > 0 {
+		for i := range dizes {
+			renameInRelease(dizes[i], directoryToScan, DizPattern)
+		}
+	}
+	removeEmptyDirectories(directoryToScan)
 	elapsed := time.Since(start)
 	log.Printf("listing took %s", elapsed)
 	log.Printf("total errors walking: %d\n", errorsWalking)
 	log.Printf("total errors unpacking: %d", errorsUnpacking)
 
+}
+
+func handleArchives(walkFilesX map[string][]string, outputDirectory string) {
+	keys := getKeysFromMap(walkFilesX)
+	for i := range keys {
+		unpackAllFiles(walkFilesX[keys[i]], outputDirectory, keys[i])
+	}
+}
+
+func getKeysFromMap(mapOfElements map[string][]string) []string {
+	keys := make([]string, 0, len(mapOfElements))
+	for k := range mapOfElements {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func unpackAllFiles(files []string, outputDirectory string, ext string) {
+
+	rarArchiver := archiver.Rar{
+		OverwriteExisting:      true,
+		MkdirAll:               true,
+		ImplicitTopLevelFolder: false,
+		StripComponents:        0,
+		ContinueOnError:        false,
+	}
+
+	zipArchiver := archiver.Zip{
+		CompressionLevel:       flate.BestCompression,
+		MkdirAll:               true,
+		SelectiveCompression:   true,
+		ContinueOnError:        false,
+		OverwriteExisting:      true,
+		ImplicitTopLevelFolder: false,
+	}
+
+	for _, file := range files {
+		fileAbsolutePath, _ := filepath.Abs(file)
+		var outputFullPath = getFullPath(outputDirectory, file)
+		if ext == RarArchiveExt {
+			handleRarArchive(rarArchiver, fileAbsolutePath, outputFullPath, file)
+		} else if ext == ZipArchiveExt {
+			handleZipArchive(zipArchiver, fileAbsolutePath, outputFullPath, file)
+		}
+	}
+}
+
+func handleRarArchive(rarArchiver archiver.Rar, fileAbsolutePath string, outputFullPath string, file string) {
+	err := rarArchiver.Unarchive(fileAbsolutePath, outputFullPath)
+	if err != nil {
+		log.Printf("failed to unpack file: %s, %v\n", file, err)
+	} else {
+		log.Printf("file was unpacked: %s\n", file)
+		forGlob := filepath.Join(filepath.Dir(file), RarPattern)
+		files, err := filepath.Glob(forGlob)
+		if err != nil {
+			log.Printf("failed to remove make glob pattern: %s, %v", forGlob, err)
+		}
+		for _, f := range files {
+			if err := os.Remove(f); err != nil {
+				log.Printf("failed to remove file: %s, %v", file, err)
+			} else {
+				log.Printf("file was removed: %s", file)
+			}
+		}
+	}
+}
+
+func handleZipArchive(zipArchiver archiver.Zip, fileAbsolutePath string, outputFullPath string, file string) {
+	err := zipArchiver.Unarchive(fileAbsolutePath, outputFullPath)
+	if err != nil {
+		log.Printf("failed to unpack file: %s, %v\n", file, err)
+	} else {
+		log.Printf("file was unpacked: %s\n", file)
+		err := os.Remove(file)
+		if err != nil {
+			log.Printf("failed to remove file: %s, %v", file, err)
+		} else {
+			log.Printf("file was removed: %s", file)
+		}
+	}
+}
+func getFullPath(outputDirectory string, file string) string {
+	if outputDirectory == "" {
+		return filepath.Dir(file)
+	} else {
+		return filepath.Join(outputDirectory, filepath.Base(filepath.Dir(file)))
+	}
+}
+
+//goland:noinspection ALL
+func unzipInDirectory(zipFile string) {
+	var outputDirectory = filepath.Dir(zipFile)
+	archiveReader, err := zip.OpenReader(zipFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := archiveReader.Close(); err != nil {
+			panic(err)
+		}
+	}()
+	for _, f := range archiveReader.File {
+		var ok = false
+		filePath := filepath.Join(outputDirectory, f.Name)
+		fmt.Println("unzipping file ", filePath)
+
+		if !strings.HasPrefix(filePath, filepath.Clean(outputDirectory)+string(os.PathSeparator)) {
+			fmt.Println("invalid file path")
+			return
+		}
+		if f.FileInfo().IsDir() {
+			fmt.Println("creating directory...")
+			err := os.MkdirAll(filePath, os.ModePerm)
+			if err != nil {
+				_ = fmt.Errorf("failed to create directory: %s", err)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
+			panic(err)
+		}
+
+		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			panic(err)
+		}
+
+		fileInArchive, err := f.Open()
+		if err != nil {
+			panic(err)
+		}
+
+		if _, err := io.Copy(dstFile, fileInArchive); err != nil {
+			panic(err)
+		}
+		ok = true
+
+		err = dstFile.Close()
+		if err != nil {
+			ok = false
+			log.Fatal(err)
+		}
+		err = fileInArchive.Close()
+		if err != nil {
+			ok = false
+			log.Fatal(err)
+		}
+		if ok {
+			err := os.Remove(zipFile)
+			if err != nil {
+				log.Fatalf("failed to remove file: %s, %v\n", zipFile, err)
+			}
+		}
+	}
 }
 
 func updateStrings(archTypes []string) []string {
@@ -97,12 +297,14 @@ func updateStrings(archTypes []string) []string {
 	return archTypesNew
 }
 
+//goland:noinspection ALL
 func replaceStringAtIndex(in string, r rune, i int) string {
 	out := []rune(in)
 	out[i] = r
 	return string(out)
 }
 
+//goland:noinspection ALL
 func unpackInDirectory(errorsUnpacking *int, files *map[string]bool) {
 	var archive string
 	for k := range *files {
@@ -142,31 +344,31 @@ func unpackInDirectory(errorsUnpacking *int, files *map[string]bool) {
 		if len(iso) > 0 {
 			cleanUpAfterUnpack(archive)
 			renameIsoInRelease(archive)
-			renameInRelease(archive, ".nfo")
+			renameInRelease(archive, "", "")
 			delete(*files, archive)
 			return
 		}
 		epub, _ := listFilesWithPattern(archive, EpubPattern)
 		if len(epub) > 0 {
 			cleanUpAfterUnpack(archive)
-			renameInRelease(archive, ".epub")
-			renameInRelease(archive, ".nfo")
+			renameInRelease(archive, "", ".epub")
+			renameInRelease(archive, "", ".nfo")
 			delete(*files, archive)
 			return
 		}
 		pdf, _ := listFilesWithPattern(archive, PdfPattern)
 		if len(pdf) > 0 {
 			cleanUpAfterUnpack(archive)
-			renameInRelease(archive, ".pdf")
-			renameInRelease(archive, ".nfo")
+			renameInRelease(archive, "", ".pdf")
+			renameInRelease(archive, "", ".nfo")
 			delete(*files, archive)
 			return
 		}
 		mobi, _ := listFilesWithPattern(archive, MobiPattern)
 		if len(mobi) > 0 {
 			cleanUpAfterUnpack(archive)
-			renameInRelease(archive, ".mobi")
-			renameInRelease(archive, ".nfo")
+			renameInRelease(archive, "", ".mobi")
+			renameInRelease(archive, "", ".nfo")
 			delete(*files, archive)
 			return
 		}
@@ -176,7 +378,7 @@ func unpackInDirectory(errorsUnpacking *int, files *map[string]bool) {
 			delete(*files, archive)
 			return
 		} else {
-			dir, err := ioutil.ReadDir(filepath.Dir(archive))
+			dir, err := os.ReadDir(filepath.Dir(archive))
 			if err != nil {
 				log.Printf("Error reading directory %s\n", archive)
 				delete(*files, archive)
@@ -216,6 +418,7 @@ func unpackInDirectory(errorsUnpacking *int, files *map[string]bool) {
 	delete(*files, archive)
 }
 
+//goland:noinspection ALL
 func RemoveIndex(s []string, index int) []string {
 	return append(s[:index], s[index+1:]...)
 }
@@ -228,23 +431,20 @@ func renameIsoInRelease(rar string) {
 		log.Printf("Error renaming %s to %s\n%v\n", rar, join, err)
 	}
 }
-func renameInRelease(rar string, patternString string) {
-	pattern, err2 := listFilesWithPattern(rar, "*"+patternString)
-
-	if len(pattern) > 0 && err2 == nil {
-		join := filepath.Join(filepath.Dir(rar), filepath.Base(filepath.Dir(rar))+patternString)
-		err := os.Rename(pattern[0], join)
-		if err != nil {
-			log.Printf("Error renaming %s to %s\n%v\n", rar, join, err)
-		}
-	} else {
-		log.Printf("Error renaming nfo file in %s\n%v\n", rar, err2)
+func renameInRelease(file string, directoryToScan string, patternString string) {
+	filePath := filepath.Dir(file)
+	newFileName := filepath.Base(filePath)
+	//parentDirectory := filepath.Dir(filePath)
+	join := filepath.Join(directoryToScan, newFileName+patternString)
+	err := os.Rename(file, join)
+	if err != nil {
+		log.Printf("Error renaming %s to %s\n%v\n", file, join, err)
 	}
 }
 
 func cleanUpAfterUnpack(rarFile string) {
-	for i := range list {
-		filesWithPattern, err := listFilesWithPattern(rarFile, list[i])
+	for i := range []string{RarPattern, SfvPattern} {
+		filesWithPattern, err := listFilesWithPattern(rarFile, []string{RarPattern, SfvPattern}[i])
 		if err != nil {
 			log.Printf("no files with filesWithPattern: %v\n", filesWithPattern)
 		} else if len(filesWithPattern) > 0 {
@@ -259,8 +459,27 @@ func cleanUpAfterUnpack(rarFile string) {
 	}
 }
 
+func removeEmptyDirectories(folder string) {
+	err := filepath.Walk(folder, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			pattern, _ := listFilesWithPattern(path, "*")
+			if len(pattern) <= 0 {
+				log.Printf("empty: %s", path)
+				err := os.Remove(path)
+				if err != nil {
+					fmt.Printf("error deleting empty directory: %s, %v", path, err)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("error walking directory: %s, %v", folder, err)
+	}
+}
+
 func listFilesWithPattern(folder string, pattern string) ([]string, error) {
-	join := filepath.Join(filepath.Dir(folder), pattern)
+	join := filepath.Join(filepath.Clean(folder), pattern)
 	files, err := filepath.Glob(join)
 	if err != nil {
 		log.Printf("could not find files with pattern %s in %s\n%v", pattern, folder, err)
@@ -268,17 +487,16 @@ func listFilesWithPattern(folder string, pattern string) ([]string, error) {
 	return files, err
 }
 
-func WalkFiles(root string, extensions []string, errorsWalking *int) map[string]bool {
-	var filesMap = make(map[string]bool)
-	//var files []string
-
+func WalkDirectories(root string, extensions []string, errorsWalking *int) map[string][]string {
+	var directories = make(map[string][]string)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		var ext = filepath.Ext(path)
 		if !info.IsDir() && ArrayContains(extensions, ext) {
-			//fmt.Printf("extension is %s of %s\n", ext, path)
-			//fmt.Printf("path: %s\n", path)
-			//files = append(files, path)
-			filesMap[path] = true
+			if value, ok := directories[ext]; ok {
+				directories[ext] = append(value, path)
+			} else {
+				directories[ext] = []string{path}
+			}
 		}
 		return nil
 	})
@@ -286,28 +504,10 @@ func WalkFiles(root string, extensions []string, errorsWalking *int) map[string]
 		*errorsWalking++
 		log.Printf("error walking directory '%s'\n%v", root, err)
 	}
-	return filesMap
+	return directories
 }
 
-func WalkDirectories(root string, extensions []string, errorsWalking *int) []string {
-	var directories []string
-
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		var ext = filepath.Ext(path)
-		if !info.IsDir() && ArrayContains(extensions, ext) {
-			//fmt.Printf("extension is %s of %s\n", ext, path)
-			//fmt.Printf("path: %s\n", path)
-			directories = append(directories, path)
-		}
-		return nil
-	})
-	if err != nil {
-		*errorsWalking++
-		log.Printf("error walking directory '%s'\n%v", root, err)
-	}
-	return unique(directories)
-}
-
+//goland:noinspection ALL
 func mapToSet(map[string]types.Tuple) map[string]bool {
 	var set = make(map[string]bool) // New empty set
 	set["Foo"] = true               // Add
@@ -315,9 +515,9 @@ func mapToSet(map[string]types.Tuple) map[string]bool {
 		fmt.Println(k)
 	}
 	return set
-
 }
 
+//goland:noinspection ALL
 func unique(e []string) []string {
 	var r []string
 
