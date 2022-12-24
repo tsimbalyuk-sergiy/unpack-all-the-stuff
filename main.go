@@ -46,17 +46,9 @@ func main() {
 	flag.Parse()
 
 	if directoryToScan == "" {
-		log.Fatal("Please specify target directory")
+		log.Fatal("source directory required")
 	}
-	/*if outputDirectory == "" {
-		outputPath := filepath.Join(directoryToScan, "out_"+time.Now().Format("150405"))
-		err := os.Mkdir(outputPath, 0755)
-		if err != nil {
-			panic(err)
-		} else {
-			log.Println("Output directory was set to: " + outputPath)
-		}
-	}*/
+
 	var archTypes []string
 	if len(archiveType) > 0 {
 		archTypes = strings.Split(archiveType, ",")
@@ -72,12 +64,15 @@ func main() {
 		errorsWalking   = 0
 		errorsUnpacking = 0
 	)
+
 	walkFilesX := WalkDirectories(directoryToScan, archTypes, &errorsWalking)
 
+	/*TEH WHILE!*/
 	for len(walkFilesX) != 0 {
-		handleArchives(walkFilesX, outputDirectory)
+		handleArchives(walkFilesX, directoryToScan)
 		walkFilesX = WalkDirectories(directoryToScan, archTypes, &errorsWalking)
 	}
+
 	log.Println("done extracting")
 
 	log.Printf("cleaning up")
@@ -86,7 +81,7 @@ func main() {
 	nfos := nfo[NfoPattern]
 	if len(nfos) > 0 {
 		for i := range nfos {
-			renameInRelease(nfos[i], directoryToScan, NfoPattern)
+			renameInRelease(nfos[i], outputDirectory, NfoPattern)
 		}
 	}
 
@@ -94,35 +89,35 @@ func main() {
 	isos := iso[IsoPattern]
 	if len(isos) > 0 {
 		for i := range isos {
-			renameInRelease(isos[i], directoryToScan, IsoPattern)
+			renameInRelease(isos[i], outputDirectory, IsoPattern)
 		}
 	}
 	epub := WalkDirectories(directoryToScan, []string{EpubPattern}, &errorsWalking)
 	epubs := epub[EpubPattern]
 	if len(epubs) > 0 {
 		for i := range epubs {
-			renameInRelease(epubs[i], directoryToScan, EpubPattern)
+			renameInRelease(epubs[i], outputDirectory, EpubPattern)
 		}
 	}
 	pdf := WalkDirectories(directoryToScan, []string{PdfPattern}, &errorsWalking)
 	pdfs := pdf[PdfPattern]
 	if len(pdfs) > 0 {
 		for i := range pdfs {
-			renameInRelease(pdfs[i], directoryToScan, PdfPattern)
+			renameInRelease(pdfs[i], outputDirectory, PdfPattern)
 		}
 	}
 	mobi := WalkDirectories(directoryToScan, []string{MobiPattern}, &errorsWalking)
 	mobis := mobi[MobiPattern]
 	if len(mobis) > 0 {
 		for i := range mobis {
-			renameInRelease(mobis[i], directoryToScan, MobiPattern)
+			renameInRelease(mobis[i], outputDirectory, MobiPattern)
 		}
 	}
 	diz := WalkDirectories(directoryToScan, []string{DizPattern}, &errorsWalking)
 	dizes := diz[DizPattern]
 	if len(dizes) > 0 {
 		for i := range dizes {
-			renameInRelease(dizes[i], directoryToScan, DizPattern)
+			renameInRelease(dizes[i], outputDirectory, DizPattern)
 		}
 	}
 	removeEmptyDirectories(directoryToScan)
