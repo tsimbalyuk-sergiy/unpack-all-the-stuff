@@ -1,6 +1,6 @@
 module github.com/tsimbalyuk-sergiy/unpack-all-the-stuff
 
-go 1.19
+go 1.21
 
 require github.com/mholt/archiver/v3 v3.5.1
 
