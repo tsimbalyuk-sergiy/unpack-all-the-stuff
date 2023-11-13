@@ -194,22 +194,45 @@ func unpackAllFiles(files []string, outputDirectory string, ext string, failedTo
 		ImplicitTopLevelFolder: false,
 	}
 
-	for _, file := range files {
+	for pos, file := range files {
 		fileAbsolutePath, _ := filepath.Abs(file)
 		var outputFullPath = getFullPath(outputDirectory, file)
 		if strings.HasSuffix(file, RarArchivePartialExt) {
 			continue
 		}
-		if ext == RarArchiveExt {
-			handleRarArchive(rarArchiver, fileAbsolutePath, outputFullPath, file, failedToUnpack, errorsUnpacking)
-		} else if ext == ZipArchiveExt {
-			handleZipArchive(zipArchiver, fileAbsolutePath, outputFullPath, file)
+		// check if file exists
+		if _, err := os.Stat(file); os.IsNotExist(err) {
+			*failedToUnpack = append(*failedToUnpack, file)
+			*errorsUnpacking++
+			continue
+		} else {
+
+			if ext == RarArchiveExt {
+				handleRarArchive(rarArchiver, fileAbsolutePath, outputFullPath, file, failedToUnpack, errorsUnpacking, &files, pos)
+				remove(files, pos)
+			} else if ext == ZipArchiveExt {
+				handleZipArchive(zipArchiver, fileAbsolutePath, outputFullPath, file, failedToUnpack, errorsUnpacking, &files, pos)
+				remove(files, pos)
+			}
 		}
 	}
 }
 
-func handleRarArchive(rarArchiver archiver.Rar, fileAbsolutePath string, outputFullPath string, file string, failedToUnpack *[]string, errorsUnpacking *int) {
+// https://stackoverflow.com/a/37335777 god bless ya mate
+func remove(s []string, i int) []string {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
+}
+
+func handleRarArchive(rarArchiver archiver.Rar, fileAbsolutePath string, outputFullPath string, file string, failedToUnpack *[]string, errorsUnpacking *int, i *[]string, pos int) {
+
 	err := rarArchiver.Unarchive(fileAbsolutePath, outputFullPath)
+	// check if file exists before unpacking it
+	if _, err := os.Stat(outputFullPath); os.IsNotExist(err) {
+		*failedToUnpack = append(*failedToUnpack, file)
+		*errorsUnpacking++
+		return
+	}
 	defer func(rarArchiver *archiver.Rar) {
 		err := rarArchiver.Close()
 		if err != nil {
@@ -235,7 +258,7 @@ func handleRarArchive(rarArchiver archiver.Rar, fileAbsolutePath string, outputF
 	}
 }
 
-func handleZipArchive(zipArchiver archiver.Zip, fileAbsolutePath string, outputFullPath string, file string) {
+func handleZipArchive(zipArchiver archiver.Zip, fileAbsolutePath string, outputFullPath string, file string, unpack *[]string, unpacking *int, i *[]string, pos int) {
 	err := zipArchiver.Unarchive(fileAbsolutePath, outputFullPath)
 	if err != nil {
 		log.Printf("failed to unpack file: %s, %v\n", file, err)
@@ -257,9 +280,14 @@ func getFullPath(outputDirectory string, file string) string {
 	}
 }
 
+// unzipInDirectory extracts the files from a zip file into a specified directory.
+//
 //goland:noinspection ALL
 func unzipInDirectory(zipFile string) {
-	var outputDirectory = filepath.Dir(zipFile)
+	// Get the output directory path
+	outputDirectory := filepath.Dir(zipFile)
+
+	// Open the zip file for reading
 	archiveReader, err := zip.OpenReader(zipFile)
 	if err != nil {
 		log.Fatal(err)
@@ -269,57 +297,76 @@ func unzipInDirectory(zipFile string) {
 			panic(err)
 		}
 	}()
-	for _, f := range archiveReader.File {
-		var ok = false
-		filePath := filepath.Join(outputDirectory, f.Name)
-		fmt.Println("unzipping file ", filePath)
 
+	// Iterate over each file in the zip archive
+	for _, f := range archiveReader.File {
+		// Initialize a flag to track if the file was successfully unzipped
+		var ok = false
+
+		// Get the file path for the current file
+		filePath := filepath.Join(outputDirectory, f.Name)
+		fmt.Println("Unzipping file:", filePath)
+
+		// Check if the file path is valid
 		if !strings.HasPrefix(filePath, filepath.Clean(outputDirectory)+string(os.PathSeparator)) {
-			fmt.Println("invalid file path")
+			fmt.Println("Invalid file path")
 			return
 		}
+
+		// If the file is a directory, create it
 		if f.FileInfo().IsDir() {
-			fmt.Println("creating directory...")
+			fmt.Println("Creating directory...")
 			err := os.MkdirAll(filePath, os.ModePerm)
 			if err != nil {
-				_ = fmt.Errorf("failed to create directory: %s", err)
+				_ = fmt.Errorf("Failed to create directory: %s", err)
 			}
 			continue
 		}
 
+		// Create the parent directory of the file if it doesn't exist
 		if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
 			panic(err)
 		}
 
+		// Open the destination file for writing
 		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
 			panic(err)
 		}
 
+		// Open the file in the zip archive for reading
 		fileInArchive, err := f.Open()
 		if err != nil {
 			panic(err)
 		}
 
+		// Copy the contents of the file in the archive to the destination file
 		if _, err := io.Copy(dstFile, fileInArchive); err != nil {
 			panic(err)
 		}
+
+		// Set the flag to indicate successful unzipping
 		ok = true
 
+		// Close the destination file
 		err = dstFile.Close()
 		if err != nil {
 			ok = false
 			log.Fatal(err)
 		}
+
+		// Close the file in the archive
 		err = fileInArchive.Close()
 		if err != nil {
 			ok = false
 			log.Fatal(err)
 		}
+
+		// If the file was successfully unzipped, remove the zip file
 		if ok {
 			err := os.Remove(zipFile)
 			if err != nil {
-				log.Fatalf("failed to remove file: %s, %v\n", zipFile, err)
+				log.Fatalf("Failed to remove file: %s, %v\n", zipFile, err)
 			}
 		}
 	}
